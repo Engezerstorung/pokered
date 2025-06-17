@@ -1455,7 +1455,7 @@ AdvancePlayerSprite::
 .afterUpdateMapCoords
 	ld a, [wWalkCounter] ; walking animation counter
 	cp $07
-	jp nz, .scrollBackgroundAndSprites
+	jp nz, ScrollBackgroundAndSprites
 ; if this is the first iteration of the animation
 	ld a, c
 	cp $01
@@ -1513,102 +1513,87 @@ AdvancePlayerSprite::
 	and $03
 	or $98
 	ld [wMapViewVRAMPointer + 1], a
+
 .adjustXCoordWithinBlock
-	ld a, c
-	and a
-	jr z, .pointlessJump ; mistake?
-.pointlessJump
-	ld hl, wXBlockCoord
-	ld a, [hl]
+	ld de, wXBlockCoord
+	ld hl, wXOffsetSinceLastSpecialWarp
+	ld a, [de]
 	add c
-	ld [hl], a
+	ld [de], a
+	ld c, 1 ; value to add or sub when adjusting wCurrentTileBlockMapViewPointer
 	cp $02
-	jr nz, .checkForMoveToWestBlock
-; moved into the tile block to the east
-	xor a
-	ld [hl], a
-	ld hl, wXOffsetSinceLastSpecialWarp
-	inc [hl]
-	ld de, wCurrentTileBlockMapViewPointer
-	call MoveTileBlockMapPointerEast
-	jr .updateMapView
-.checkForMoveToWestBlock
-	cp $ff
-	jr nz, .adjustYCoordWithinBlock
-; moved into the tile block to the west
-	ld a, $01
-	ld [hl], a
-	ld hl, wXOffsetSinceLastSpecialWarp
-	dec [hl]
-	ld de, wCurrentTileBlockMapViewPointer
-	call MoveTileBlockMapPointerWest
-	jr .updateMapView
+	jr z, IncTileBlockMapPointer ; moved into the tile block to the east
+	inc a ; z if -1 ($ff)
+	jr z, DecTileBlockMapPointer ; moved into the tile block to the west
+
 .adjustYCoordWithinBlock
-	ld hl, wYBlockCoord
-	ld a, [hl]
+	dec de ; wYBlockCoord
+	dec hl ; wYOffsetSinceLastSpecialWarp
+	ld a, [wCurMapWidth]
+	add MAP_BORDER * 2
+	ld c, a ; value to add or sub when adjusting wCurrentTileBlockMapViewPointer
+	ld a, [de]
 	add b
-	ld [hl], a
+	ld [de], a
 	cp $02
-	jr nz, .checkForMoveToNorthBlock
-; moved into the tile block to the south
-	xor a
-	ld [hl], a
-	ld hl, wYOffsetSinceLastSpecialWarp
-	inc [hl]
-	ld de, wCurrentTileBlockMapViewPointer
-	ld a, [wCurMapWidth]
-	call MoveTileBlockMapPointerSouth
-	jr .updateMapView
-.checkForMoveToNorthBlock
-	cp $ff
-	jr nz, .updateMapView
-; moved into the tile block to the north
-	ld a, $01
-	ld [hl], a
-	ld hl, wYOffsetSinceLastSpecialWarp
+	jr z, IncTileBlockMapPointer ; moved into the tile block to the south
+	inc a ; z if -1 ($ff)
+	jr nz, UpdateMapView ; if z moved into the tile block to the north
+	; Fallthrough
+
+; the following two functions are used to move the pointer to the upper left
+; corner of the tile block map in the direction of motion
+
+DecTileBlockMapPointer::
+	ld a, 1
+	ld [de], a
 	dec [hl]
-	ld de, wCurrentTileBlockMapViewPointer
-	ld a, [wCurMapWidth]
-	call MoveTileBlockMapPointerNorth
-.updateMapView
-	call LoadCurrentMapView
-	ld a, [wSpritePlayerStateData1YStepVector]
-	cp $01
-	jr nz, .checkIfMovingNorth2
-; if moving south
-	call ScheduleSouthRowRedraw
-	jr .scrollBackgroundAndSprites
-.checkIfMovingNorth2
-	cp $ff
-	jr nz, .checkIfMovingEast2
-; if moving north
-	call ScheduleNorthRowRedraw
-	jr .scrollBackgroundAndSprites
-.checkIfMovingEast2
-	ld a, [wSpritePlayerStateData1XStepVector]
-	cp $01
-	jr nz, .checkIfMovingWest2
-; if moving east
-	call ScheduleEastColumnRedraw
-	jr .scrollBackgroundAndSprites
-.checkIfMovingWest2
-	cp $ff
-	jr nz, .scrollBackgroundAndSprites
-; if moving west
-	call ScheduleWestColumnRedraw
-.scrollBackgroundAndSprites
-	ld a, [wSpritePlayerStateData1YStepVector]
-	ld b, a
-	ld a, [wSpritePlayerStateData1XStepVector]
-	ld c, a
-	sla b
-	sla c
-	ldh a, [hSCY]
-	add b
-	ldh [hSCY], a ; update background scroll Y
-	ldh a, [hSCX]
+	ld hl, wCurrentTileBlockMapViewPointer
+	ld a, [hl]
+	sub c
+	ld [hli], a
+	jr nc, UpdateMapView
+	dec [hl]
+	jr UpdateMapView
+
+IncTileBlockMapPointer::
+	xor a
+	ld [de], a
+	inc [hl]
+	ld hl, wCurrentTileBlockMapViewPointer
+	ld a, [hl]
 	add c
-	ldh [hSCX], a ; update background scroll X
+	ld [hli], a
+	jr nc, UpdateMapView
+	inc [hl]
+	; Fallthrough
+
+UpdateMapView:
+	call LoadCurrentMapView
+	ld a, [wSpritePlayerStateData1YStepVector] ; vector value can be -1($ff), 0 or 1
+	inc a ; if z then -1
+	jp z, ScheduleNorthRowRedraw
+	dec a ; if z then 0 so nz is 1
+	jp nz, ScheduleSouthRowRedraw
+	ld a, [wSpritePlayerStateData1XStepVector]
+	inc a
+	jp z, ScheduleWestColumnRedraw
+	dec a
+	jp nz, ScheduleEastColumnRedraw
+	; Fallthrough
+
+ScrollBackgroundAndSprites:
+	ld hl, hSCX
+	ld a, [wSpritePlayerStateData1XStepVector]
+	add a
+	ld c, a
+	add [hl]
+	ld [hli], a ; update background scroll X
+	ld a, [wSpritePlayerStateData1YStepVector]
+	add a
+	ld b, a
+	add [hl]
+	ld [hl], a ; update background scroll Y
 ; shift all the sprites in the direction opposite of the player's motion
 ; so that the player appears to move relative to them
 	ld hl, wSprite01StateData1YPixels
@@ -1632,57 +1617,6 @@ AdvancePlayerSprite::
 .done
 	ret
 
-; the following four functions are used to move the pointer to the upper left
-; corner of the tile block map in the direction of motion
-
-MoveTileBlockMapPointerEast::
-	ld a, [de]
-	add $01
-	ld [de], a
-	ret nc
-	inc de
-	ld a, [de]
-	inc a
-	ld [de], a
-	ret
-
-MoveTileBlockMapPointerWest::
-	ld a, [de]
-	sub $01
-	ld [de], a
-	ret nc
-	inc de
-	ld a, [de]
-	dec a
-	ld [de], a
-	ret
-
-MoveTileBlockMapPointerSouth::
-	add MAP_BORDER * 2
-	ld b, a
-	ld a, [de]
-	add b
-	ld [de], a
-	ret nc
-	inc de
-	ld a, [de]
-	inc a
-	ld [de], a
-	ret
-
-MoveTileBlockMapPointerNorth::
-	add MAP_BORDER * 2
-	ld b, a
-	ld a, [de]
-	sub b
-	ld [de], a
-	ret nc
-	inc de
-	ld a, [de]
-	dec a
-	ld [de], a
-	ret
-
 ; the following 6 functions are used to tell the V-blank handler to redraw
 ; the portion of the map that was newly exposed due to the player's movement
 
@@ -1695,7 +1629,7 @@ ScheduleNorthRowRedraw::
 	ldh [hRedrawRowOrColumnDest + 1], a
 	ld a, REDRAW_ROW
 	ldh [hRedrawRowOrColumnMode], a
-	ret
+	jp ScrollBackgroundAndSprites
 
 CopyToRedrawRowOrColumnSrcTiles::
 	ld de, wRedrawRowOrColumnSrcTiles
@@ -1712,20 +1646,15 @@ ScheduleSouthRowRedraw::
 	hlcoord 0, 16
 	call CopyToRedrawRowOrColumnSrcTiles
 	ld a, [wMapViewVRAMPointer]
-	ld l, a
+	ldh [hRedrawRowOrColumnDest], a
 	ld a, [wMapViewVRAMPointer + 1]
-	ld h, a
-	ld bc, $200
-	add hl, bc
-	ld a, h
+	add HIGH($200)
 	and $03
 	or $98
 	ldh [hRedrawRowOrColumnDest + 1], a
-	ld a, l
-	ldh [hRedrawRowOrColumnDest], a
 	ld a, REDRAW_ROW
 	ldh [hRedrawRowOrColumnMode], a
-	ret
+	jp ScrollBackgroundAndSprites
 
 ScheduleEastColumnRedraw::
 	hlcoord 18, 0
@@ -1743,7 +1672,7 @@ ScheduleEastColumnRedraw::
 	ldh [hRedrawRowOrColumnDest + 1], a
 	ld a, REDRAW_COL
 	ldh [hRedrawRowOrColumnMode], a
-	ret
+	jp ScrollBackgroundAndSprites
 
 ScheduleColumnRedrawHelper::
 	ld de, wRedrawRowOrColumnSrcTiles
@@ -1774,7 +1703,7 @@ ScheduleWestColumnRedraw::
 	ldh [hRedrawRowOrColumnDest + 1], a
 	ld a, REDRAW_COL
 	ldh [hRedrawRowOrColumnMode], a
-	ret
+	jp ScrollBackgroundAndSprites
 
 ; function to write the tiles that make up a tile block to memory
 ; Input: c = tile block ID, hl = destination address
