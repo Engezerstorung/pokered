@@ -1352,66 +1352,81 @@ LoadCurrentMapView::
 	ld a, [wTilesetBank]
 	ldh [hLoadedROMBank], a
 	ld [rROMB], a
-	ld a, [wCurrentTileBlockMapViewPointer] ; address of upper left corner of current map view
+
+	ld hl, wCurrentTileBlockMapViewPointer ; address of upper left corner of current map view
+	ld a, [hli]
 	ld e, a
-	ld a, [wCurrentTileBlockMapViewPointer + 1]
-	ld d, a
+	ld d, [hl]
 	ld hl, wSurroundingTiles
-	ld b, SCREEN_BLOCK_HEIGHT
-.rowLoop ; each loop iteration fills in one row of tile blocks
-	push hl
-	push de
-	ld c, SCREEN_BLOCK_WIDTH
-.rowInnerLoop ; loop to draw each tile block of the current row
+	lb bc, SCREEN_BLOCK_HEIGHT, SCREEN_BLOCK_WIDTH
 	push bc
-	push de
-	push hl
-	ld a, [de]
-	ld c, a ; tile block number
-	call DrawTileBlock
-	pop hl
-	pop de
-	pop bc
-	inc hl
-	inc hl
-	inc hl
-	inc hl
-	inc de
-	dec c
-	jr nz, .rowInnerLoop
-; update tile block map pointer to next row's address
-	pop de
+	jr .rowInnerLoopStart
+.rowLoop ; each loop iteration fills in one row of tile blocks
+	; update tile block map pointer to next row's address
 	ld a, [wCurMapWidth]
-	add MAP_BORDER * 2
 	add e
 	ld e, a
-	jr nc, .noCarry
-	inc d
-.noCarry
-; update tile map pointer to next row's address
-	pop hl
-	ld a, SURROUNDING_WIDTH * BLOCK_HEIGHT
-	add l
+	adc d
+	sub e
+	ld d, a
+	ld c, SCREEN_BLOCK_WIDTH
+	push bc
+	jr .rowInnerLoopStart
+.rowInnerLoop ; loop to draw each tile block of the current row
+	push bc
+	ld bc, -(SURROUNDING_WIDTH * 3)
+	add hl, bc
+.rowInnerLoopStart
+	ld a, [de] ; tile block ID
+	inc de
+	push de
+
+	push hl
 	ld l, a
-	jr nc, .noCarry2
-	inc h
-.noCarry2
+	ld h, 0
+	add hl, hl
+	add hl, hl
+	add hl, hl
+	add hl, hl ; hl = tile block ID * 0x10
+	ld a, [wTilesetBlocksPtr] ; pointer to tiles
+	add l
+	ld e, a
+	ld a, [wTilesetBlocksPtr + 1]
+	adc h
+	ld d, a ; de = address of the tile block's tiles
+	pop hl
+	ld bc, SURROUNDING_WIDTH - BLOCK_WIDTH
+FOR _NROW, 1, 1+ BLOCK_HEIGHT ; 4 row iterations, each writing 4 tile IDs
+	FOR _NCOL, 1, 1+ BLOCK_WIDTH
+		ld a, [de]
+		ld [hli], a
+		IF _NROW < BLOCK_HEIGHT || _NCOL < BLOCK_WIDTH ; dont `inc de` after the last column of the last row
+			inc de
+		ENDC
+	ENDR
+	IF _NROW < BLOCK_HEIGHT ; dont `add hl, bc` after the last row
+		add hl, bc
+	ENDC
+ENDR
+	pop de
+	pop bc
+	dec c
+	jr nz, .rowInnerLoop
 	dec b
 	jr nz, .rowLoop
+
 	ld hl, wSurroundingTiles
-	ld bc, 0
 .adjustForYCoordWithinTileBlock
 	ld a, [wYBlockCoord]
 	and a
 	jr z, .adjustForXCoordWithinTileBlock
-	ld bc, SURROUNDING_WIDTH * 2
-	add hl, bc
+	ld hl, wSurroundingTiles + SURROUNDING_WIDTH * 2
 .adjustForXCoordWithinTileBlock
 	ld a, [wXBlockCoord]
 	and a
 	jr z, .copyToVisibleAreaBuffer
-	ld bc, BLOCK_WIDTH / 2
-	add hl, bc
+	inc hl
+	inc hl
 .copyToVisibleAreaBuffer
 	decoord 0, 0 ; base address for the tiles that are directly transferred to VRAM during V-blank
 	ld b, SCREEN_HEIGHT
@@ -1426,9 +1441,9 @@ LoadCurrentMapView::
 	ld a, SURROUNDING_WIDTH - SCREEN_WIDTH
 	add l
 	ld l, a
-	jr nc, .noCarry3
-	inc h
-.noCarry3
+	adc h
+	sub l
+	ld h, a
 	dec b
 	jr nz, .rowLoop2
 	pop af
@@ -1773,44 +1788,6 @@ ScheduleWestColumnRedraw::
 	ldh [hRedrawRowOrColumnDest + 1], a
 	ld a, REDRAW_COL
 	ldh [hRedrawRowOrColumnMode], a
-	ret
-
-; function to write the tiles that make up a tile block to memory
-; Input: c = tile block ID, hl = destination address
-DrawTileBlock::
-	push hl
-	ld a, [wTilesetBlocksPtr] ; pointer to tiles
-	ld l, a
-	ld a, [wTilesetBlocksPtr + 1]
-	ld h, a
-	ld a, c
-	swap a
-	ld b, a
-	and $f0
-	ld c, a
-	ld a, b
-	and $0f
-	ld b, a ; bc = tile block ID * 0x10
-	add hl, bc
-	ld d, h
-	ld e, l ; de = address of the tile block's tiles
-	pop hl
-	ld c, BLOCK_HEIGHT ; 4 loop iterations
-.loop ; each loop iteration, write 4 tile numbers
-	push bc
-REPT BLOCK_WIDTH - 1
-	ld a, [de]
-	ld [hli], a
-	inc de
-ENDR
-	ld a, [de]
-	ld [hl], a
-	inc de
-	ld bc, SURROUNDING_WIDTH - (BLOCK_WIDTH - 1)
-	add hl, bc
-	pop bc
-	dec c
-	jr nz, .loop
 	ret
 
 ; function to update joypad state and simulate button presses
