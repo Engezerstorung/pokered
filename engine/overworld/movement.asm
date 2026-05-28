@@ -458,19 +458,22 @@ InitializeSpriteScreenPosition:
 	add SPRITESTATEDATA2_MAPY
 	ld l, a
 	ld a, [wYCoord]
-	ld b, a
-	ld a, [hl]      ; x#SPRITESTATEDATA2_MAPY
-	sub b           ; relative to player position
-	swap a          ; * 16
+	cpl
+	inc a
+	add [hl] ; x#SPRITESTATEDATA2_MAPY
+	and $f
+	swap a ; * 16
 	sub $4          ; - 4
 	dec h
 	ld [hli], a     ; [x#SPRITESTATEDATA1_YPIXELS]
 	inc h
 	ld a, [wXCoord]
-	ld b, a
-	ld a, [hli]     ; x#SPRITESTATEDATA2_MAPX
-	sub b           ; relative to player position
-	swap a          ; * 16
+	cpl
+	inc a
+	add [hl] ; x#SPRITESTATEDATA2_MAPX
+	and $f
+	swap a ; * 16
+	inc l
 	dec h
 	ld [hl], a      ; [x#SPRITESTATEDATA1_XPIXELS]
 	ret
@@ -492,42 +495,63 @@ CheckSpriteAvailability:
 	add SPRITESTATEDATA2_MAPY
 	ld l, a
 	ld b, [hl]      ; x#SPRITESTATEDATA2_MAPY
+	inc b
 	ld a, [wYCoord]
 	cp b
 	jr z, .skipYVisibilityTest
 	jr nc, .spriteInvisible ; above screen region
-	add SCREEN_HEIGHT / 2 - 1
+	add SCREEN_HEIGHT / 2 + 1
 	cp b
 	jr c, .spriteInvisible  ; below screen region
 .skipYVisibilityTest
 	inc l
 	ld b, [hl]      ; x#SPRITESTATEDATA2_MAPX
+	inc b
 	ld a, [wXCoord]
 	cp b
 	jr z, .skipXVisibilityTest
 	jr nc, .spriteInvisible ; left of screen region
-	add SCREEN_WIDTH / 2 - 1
+	add SCREEN_WIDTH / 2 + 1
 	cp b
 	jr c, .spriteInvisible  ; right of screen region
 .skipXVisibilityTest
 ; make the sprite invisible if a text box is in front of it
 ; $5F is the maximum number for map tiles
 	call GetTileSpriteStandsOn
+
+	ld a, [hl]
+
+	push af
+
+	ld a, [wFontLoaded]
+	bit 0, a
+	jr z, .spriteVisible ; pass under text check if no text
+
+	ld bc, -SCREEN_WIDTH * 2
+	ld a, d
+	cp 144
+
 	ld d, MAP_TILESET_SIZE
+
+	jr z, .justUnderScreen ; if just under screen, offset the Y position one tile higher and only check top tiles
+
 	ld a, [hli]
 	cp d
-	jr nc, .spriteInvisible ; standing on tile with ID >=MAP_TILESET_SIZE (bottom left tile)
+	jr nc, .spriteHidden ; standing on tile with ID >=MAP_TILESET_SIZE (bottom left tile)
 	ld a, [hld]
 	cp d
-	jr nc, .spriteInvisible ; standing on tile with ID >=MAP_TILESET_SIZE (bottom right tile)
+	jr nc, .spriteHidden ; standing on tile with ID >=MAP_TILESET_SIZE (bottom right tile)
 	ld bc, -SCREEN_WIDTH
+.justUnderScreen
 	add hl, bc              ; go back one row of tiles
 	ld a, [hli]
 	cp d
-	jr nc, .spriteInvisible ; standing on tile with ID >=MAP_TILESET_SIZE (top left tile)
+	jr nc, .spriteHidden ; standing on tile with ID >=MAP_TILESET_SIZE (top left tile)
 	ld a, [hl]
 	cp d
 	jr c, .spriteVisible    ; standing on tile with ID >=MAP_TILESET_SIZE (top right tile)
+.spriteHidden
+	pop af
 .spriteInvisible
 	ld h, HIGH(wSpriteStateData1)
 	ldh a, [hCurrentSpriteOffset]
@@ -535,13 +559,14 @@ CheckSpriteAvailability:
 	ld l, a
 	ld [hl], $ff       ; x#SPRITESTATEDATA1_IMAGEINDEX
 	scf
-	jr .done
+	ret
 .spriteVisible
-	ld c, a
-	ld a, [wWalkCounter]
-	and a
-	jr nz, .done           ; if player is currently walking, we're done
 	call UpdateSpriteImage
+
+	pop af
+	ret nc ; ret if the sprite is currently exiting the screen
+
+	ld c, a
 	inc h
 	ldh a, [hCurrentSpriteOffset]
 	add $7
@@ -554,7 +579,6 @@ CheckSpriteAvailability:
 .notInGrass
 	ld [hl], a       ; x#SPRITESTATEDATA2_GRASSPRIORITY
 	and a
-.done
 	ret
 
 UpdateSpriteImage:
@@ -703,27 +727,74 @@ GetTileSpriteStandsOn:
 	ldh a, [hCurrentSpriteOffset]
 	add SPRITESTATEDATA1_YPIXELS
 	ld l, a
+
+	lb de, 0, 0 ; default coordinates adjusting values if player is either not currently moving or moving down or right
+	lb bc, $f8, 16  ; b : value to round down to nearest tile in case object is currently moving 
+					; c : coordinates adjusting value if player is currently moving up or left
+
+	ld a, [wWalkCounter]
+	and a
+	jr z, .playerNotMoving
+
+	ld b, $f0 ; value to round down to nearest 2*2 tile block in case player is currently moving
+
+	; coordinates values will be rounded them indiscriminately
+	; but they need to be rounded up if the player is moving up or left
+	ld a, [wPlayerMovingDirection]
+	and PLAYER_DIR_UP | PLAYER_DIR_LEFT
+	jr z, .playerNotMoving
+
+	bit PLAYER_DIR_BIT_UP, a
+	jr z, .notMovingUp
+	ld d, c ; value to round up Y coordinate
+	ld c, e ; zero-ing c
+.notMovingUp
+	ld e, c ; value to round up X coordinate
+
+.playerNotMoving
 	ld a, [hli]     ; x#SPRITESTATEDATA1_YPIXELS
 	add $4          ; align to 2*2 tile blocks (Y position is always off 4 pixels to the top)
-	and $f0         ; in case object is currently moving
-	srl a           ; screen Y tile * 4
-	ld c, a
-	ld b, $0
+	and b           ; in case object or player is currently moving
+	add d			; in case player is currently moving
+	ld d, a
+	ld c, a         ; screen Y tile * 8
 	inc l
 	ld a, [hl]      ; x#SPRITESTATEDATA1_XPIXELS
-	srl a
-	srl a
-	srl a            ; screen X tile
-	add SCREEN_WIDTH ; screen X tile + 20
-	ld d, $0
+	and b           ; in case object or player is currently moving
+	add e			; in case player is currently moving
 	ld e, a
+	rrca
+	rrca
+	rrca             ; screen X tile
+	add SCREEN_WIDTH ; screen X tile + 20
+	ld b, $0
 	hlcoord 0, 0
 	add hl, bc
 	add hl, bc
+	rrc c            ; screen Y tile * 4
 	add hl, bc
-	add hl, bc
-	add hl, bc
-	add hl, de     ; wTileMap + 20*(screen Y tile + 1) + screen X tile
+	ld c, a
+	add hl, bc       ; wTileMap + 20*(screen Y tile + 1) + screen X tile
+
+; The following code set the c flag accordingly to prevent updating the sprite grass priority status 
+; in a situation where the sprite is currently exiting the screen while the player is moving.
+; c  : update
+; nc : no update
+	ld a, [wWalkCounter]
+	and a
+	scf
+	ret z
+
+	ld a, [wPlayerMovingDirection]
+	and PLAYER_DIR_DOWN | PLAYER_DIR_UP
+	jr z, .movingHorizontaly
+; moving verticaly
+	ld a, d
+	cp 144 ; if nc, exiting from the right (>=160) or left (< 0, aka [144;255]) of the screen
+	ret
+.movingHorizontaly
+	ld a, e
+	cp 160 ; if nc, exiting from the bottom (>= 144) or top (< 0, aka [160;255]) of the screen
 	ret
 
 ; loads [de+a] into a

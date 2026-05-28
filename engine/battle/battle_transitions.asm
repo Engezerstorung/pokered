@@ -4,47 +4,26 @@ BattleTransition:
 	call Delay3
 	xor a
 	ldh [hWY], a
-	dec a
-	ld [wUpdateSpritesEnabled], a
 	call DelayFrame
 
-; Determine which OAM block is being used by the enemy trainer sprite (if there
-; is one).
-	ld hl, wSpritePlayerStateData1ImageIndex
+; Hide all sprites except player and enemy trainer
+	ld h, HIGH(wSprite01StateData1ImageIndex)
 	ldh a, [hSpriteIndex] ; enemy trainer sprite index (0 if wild battle)
-	ld c, a
-	ld b, 0
-	ld de, SPRITESTATEDATA1_LENGTH
-.loop1
-	ld a, [hl]
-	cp $ff
-	jr z, .skip1
-	inc b
-.skip1
-	add hl, de
-	dec c
-	jr nz, .loop1
-
-; Clear OAM except for the blocks used by the player and enemy trainer sprites.
-	ld hl, wShadowOAMSprite04
-	ld c, 9
-.loop2
-	ld a, b
 	swap a
-	cp l
-	jr z, .skip2 ; skip clearing the block if the enemy trainer is using it
-	push hl
-	push bc
-	ld bc, OBJ_SIZE * 4
-	xor a
-	call FillMemory
-	pop bc
-	pop hl
-.skip2
-	ld de, OBJ_SIZE * 4
-	add hl, de
-	dec c
-	jr nz, .loop2
+	add SPRITESTATEDATA1_IMAGEINDEX
+	ld c, a
+
+	lb de, $10, $ff
+	ld a, LOW(wSprite01StateData1ImageIndex)
+.loop
+	cp c
+	jr z, .skipSprite
+	ld l, a
+	ld [hl], e
+	ld a, l
+.skipSprite
+	add d
+	jr nc, .loop
 
 	call Delay3
 	call LoadBattleTransitionTile

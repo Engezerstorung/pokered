@@ -33,7 +33,7 @@ PrepareOAMData::
 	jr nz, .visible
 
 	call GetSpriteScreenXY
-	jr .nextSprite
+	jp .nextSprite
 
 .visible
 	cp $a0 ; is the sprite unchanging like an item ball or boulder?
@@ -85,11 +85,27 @@ PrepareOAMData::
 	ldh a, [hSpriteScreenY]   ; temp for sprite Y position
 	add $10                  ; Y=16 is top of screen (Y=0 is invisible)
 	add [hl]                 ; add Y offset from table
-	ld [de], a               ; write new sprite OAM Y position
 	inc hl
+	cp 9
+	jr c, .tileInvisibleY
+	cp 160
+	jr c, .tileVisibleY
+.tileInvisibleY
+	inc hl
+.tileInvisibleX
+	inc bc
+	ld a, e
+	jr .passTile
+.tileVisibleY
+	ld [de], a               ; write new sprite OAM Y position
 	ldh a, [hSpriteScreenX]   ; temp for sprite X position
 	add $8                   ; X=8 is left of screen (X=0 is invisible)
 	add [hl]                 ; add X offset from table
+	inc hl
+	and a
+	jr z, .tileInvisibleX
+	cp 168
+	jr nc, .tileInvisibleX
 	inc e
 	ld [de], a               ; write new sprite OAM X position
 	inc e
@@ -121,7 +137,6 @@ PrepareOAMData::
 	add b ; add the tile offset from the table (based on frame and facing direction)
 	pop bc
 	ld [de], a ; tile id
-	inc hl
 	inc e
 	ld a, [hl]
 	bit BIT_SPRITE_UNDER_GRASS, a
@@ -129,13 +144,18 @@ PrepareOAMData::
 	ldh a, [hSpritePriority]
 	or [hl]
 .skipPriority
-	inc hl
 	ld [de], a
 	inc e
-	bit BIT_END_OF_OAM_DATA, a
-	jr z, .tileLoop
 
 	ld a, e
+	cp LOW(wShadowOAMEnd) ; is the OAM full?
+	ret z ; if so stop there to prevent issues
+
+.passTile
+	bit BIT_END_OF_OAM_DATA, [hl]
+	inc hl
+	jr z, .tileLoop
+
 	ldh [hOAMBufferOffset], a
 
 .nextSprite
